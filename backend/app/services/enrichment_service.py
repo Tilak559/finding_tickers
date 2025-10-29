@@ -5,6 +5,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Optional
 from datetime import datetime
+from pathlib import Path
 import pandas as pd
 
 from app.core.logging import get_logger
@@ -264,15 +265,22 @@ class EnrichmentService:
                     processing_time_seconds=0.0
                 )
             
-            # Save temporary file
-            temp_input_path = f"data/temp_{file.filename}"
+            # Ensure data directory exists - use absolute path from backend directory
+            backend_dir = Path(__file__).parent.parent.parent  # Go up to backend directory
+            data_dir = backend_dir / "data"
+            data_dir.mkdir(exist_ok=True)
+            
+            # Save temporary file with proper path handling
+            temp_filename = f"temp_{file.filename}"
+            temp_input_path = data_dir / temp_filename
             df.to_csv(temp_input_path, index=False)
             
             # Generate output path
-            output_path = f"data/{file.filename.replace('.csv', '')}_enriched.csv"
+            output_filename = f"{file.filename.replace('.csv', '')}_enriched.csv"
+            output_path = data_dir / output_filename
             
             # Process file
-            result = self.enrich_csv_file(temp_input_path, output_path)
+            result = self.enrich_csv_file(str(temp_input_path), str(output_path))
             
             # Cleanup temporary file (optional, keeping original logic)
             # if os.path.exists(temp_input_path):
