@@ -125,6 +125,7 @@ backend/app/
 │   └── file_service.py      # File operations service
 ├── utils/
 │   ├── csv_handler.py       # CSV processing utilities
+│   ├── matcher.py           # NLP-based word matching and correction
 │   ├── rate_limiter.py      # Rate limiting implementation
 │   └── validators.py        # Input validation utilities
 └── main.py                  # FastAPI application
@@ -146,31 +147,58 @@ class FinnhubService:
 **Key Features:**
 - **API Integration**: Finnhub symbol lookup with error handling
 - **Rate Limiting**: Token bucket algorithm (60 requests/minute)
-- **Retry Logic**: Exponential backoff for failed requests
+- **Retry Logic**: NLP-based retry logic with up to 3 attempts
+- **NLP Matching**: Intelligent word correction for misspelled company names
 - **Company Name Truncation**: Handles API query length limitations
 - **Error Mapping**: Converts API errors to custom exceptions
 - **Singleton Pattern**: Efficient client management
 
 **Company Name Processing Strategy:**
-The system implements the original simple logic:
+The system implements intelligent retry logic with NLP-based corrections:
 
 1. **First Word Only**: Always use only the first word of the company name
 2. **First Symbol Selection**: Always take the first symbol from API response
-3. **No Fallback**: No complex error handling or fallback strategies
+3. **NLP-Based Retry**: If initial lookup fails, uses NLP to suggest corrections and retries up to 3 times
+4. **Smart Error Handling**: Comprehensive error tracking with attempt details
 
-**Processing Logic:**
+**Processing Logic with NLP Retry:**
 ```python
 # Step 1: Extract first word from company name
-symbol = company_name.split(" ")[0]
+original_symbol = company_name.split(" ")[0]
 
-# Step 2: Call Finnhub API
-response = finnhub_client.symbol_lookup(symbol)
-
-# Step 3: Take the FIRST symbol from the response
+# Step 2: Attempt 1 - Try with original word
+response = finnhub_client.symbol_lookup(original_symbol)
 if "result" in response and response["result"]:
-    found_symbol = response["result"][0]["symbol"]  # Always first symbol
-    return found_symbol
+    symbol = response["result"][0]["symbol"]
+    description = response["result"][0].get("description", "")
+    return symbol, description
+
+# Step 3: Attempt 2 - If failed, use NLP to correct word
+corrected_word = NLPMatcher.get_corrected_word(original_symbol)
+if corrected_word:
+    response = finnhub_client.symbol_lookup(corrected_word)
+    if "result" in response and response["result"]:
+        symbol = response["result"][0]["symbol"]
+        description = response["result"][0].get("description", "")
+        return symbol, description
+
+# Step 4: Attempt 3 - Final attempt with NLP correction (if different)
+# Continue retry logic...
+
+# Step 5: Raise exception if all attempts fail
+raise SymbolNotFoundException(company_name, details={"attempts": attempts})
 ```
+
+**Data Extraction:**
+- **Symbol**: Extracted from `response["result"][0]["symbol"]`
+- **Description**: Extracted from `response["result"][0]["description"]` (actual stock name/company name)
+- **Return Value**: Returns tuple `(symbol, description)` for successful lookups
+
+**NLP Matcher (`app/utils/matcher.py`):**
+- **Fuzzy String Matching**: Uses Python's `difflib` for similarity scoring
+- **Common Company Words Dictionary**: Pre-loaded dictionary of 50+ common company name keywords
+- **Similarity Threshold**: Minimum 60% similarity for valid corrections
+- **Word Correction**: Suggests corrected versions of potentially misspelled words
 
 **Finnhub API Response Example:**
 ```json
@@ -205,31 +233,47 @@ if "result" in response and response["result"]:
 }
 ```
 
-**Symbol Selection Logic:**
+**Symbol and Description Selection Logic:**
 - **Input**: `"Apple Inc"` → **Query**: `"Apple"`
 - **API Response**: 4 symbols found (AAPL, AAPL.SW, APC.BE, APC.DE)
-- **Selected**: `"AAPL"` (first symbol in the array)
-- **Result**: `"Apple Inc"` → **AAPL** ✅
+- **Selected Symbol**: `"AAPL"` (first symbol in the array)
+- **Selected Description**: `"APPLE INC"` (from first result's description field)
+- **Result**: `"Apple Inc"` → **Symbol: AAPL**, **Description: APPLE INC** ✅
 
-**Example Processing:**
-- `"Microsoft Corporation"` → `"Microsoft"` → **MSFT** ✅ (first symbol)
-- `"Berkshire Hathaway Inc. Class B"` → `"Berkshire"` → **BRK.A** ✅ (first symbol)
-- `"Tesla Inc"` → `"Tesla"` → **TSLA** ✅ (first symbol)
-- `"Apple Inc"` → `"Apple"` → **AAPL** ✅ (first symbol)
+**Example Processing (Successful Cases):**
+- `"Microsoft Corporation"` → `"Microsoft"` → **Symbol: MSFT**, **Description: MICROSOFT CORP** ✅
+- `"Berkshire Hathaway Inc. Class B"` → `"Berkshire"` → **Symbol: BRK.A**, **Description: BERKSHIRE HATHAWAY INC** ✅
+- `"Tesla Inc"` → `"Tesla"` → **Symbol: TSLA**, **Description: TESLA INC** ✅
+- `"Apple Inc"` → `"Apple"` → **Symbol: AAPL**, **Description: APPLE INC** ✅
+
+**Example Processing with NLP Retry (Misspelled Cases):**
+- `"Appl Inc"` → Attempt 1: `"Appl"` → No results → Attempt 2: NLP suggests `"Apple"` → **Symbol: AAPL**, **Description: APPLE INC** ✅
+- `"Microsft Corporation"` → Attempt 1: `"Microsft"` → No results → Attempt 2: NLP suggests `"Microsoft"` → **Symbol: MSFT**, **Description: MICROSOFT CORP** ✅
+- `"Teslaa Inc"` → Attempt 1: `"Teslaa"` → No results → Attempt 2: NLP suggests `"Tesla"` → **Symbol: TSLA**, **Description: TESLA INC** ✅
+
+**Retry Logic Details:**
+- **Maximum Attempts**: 3 attempts total
+- **Attempt 1**: Uses original first word as-is
+- **Attempt 2-3**: Uses NLP-corrected word if available and different from original
+- **Rate Limit Handling**: Rate limit errors raise immediately (no retry)
+- **Error Details**: All failed attempts are logged with word tried and status
+- **No Correction Available**: If NLP finds no correction, attempts are skipped until max attempts reached
 
 #### 2. EnrichmentService (`app/services/enrichment_service.py`)
 ```python
 class EnrichmentService:
     # Simplified enrichment following original logic
-    def get_symbol(company_name: str) -> Optional[str]
-    def process_row(idx: int, company_name: str) -> tuple[int, Optional[str]]
-    def enrich_single_company(company_name: str) -> SymbolResponse
-    def enrich_csv_file(input_csv: str, output_csv: str) -> EnrichmentResult
-    def enrich_uploaded_file(file) -> EnrichmentResult
+    def get_symbol(company_name: str) -> tuple[Optional[str], Optional[str]]  # Returns (symbol, description)
+    def process_row(idx: int, company_name: str) -> tuple[int, Optional[str], Optional[str]]  # Returns (index, symbol, description)
+    def enrich_single_company(company_name: str) -> SymbolResponse  # Includes description field
+    def enrich_csv_file(input_csv: str, output_csv: str) -> EnrichmentResult  # Adds Description column
+    def enrich_uploaded_file(file) -> EnrichmentResult  # Includes Description in CSV
 ```
 
 **Key Features:**
 - **Original Logic**: Always uses first word only for symbol lookup
+- **Symbol and Description**: Extracts both symbol and description from Finnhub API
+- **CSV Enrichment**: Adds "Description" column to CSV files with actual stock names
 - **Threading**: Uses ThreadPoolExecutor with configurable worker count
 - **Rate Limiting**: Built-in 0.5s delay between API calls
 - **Pagination**: Processes large files in configurable page sizes
@@ -267,18 +311,19 @@ GET /health
 ```http
 GET /api/lookup?company_name={name}
 ```
-- **Purpose**: Get ticker symbol for a single company
+- **Purpose**: Get ticker symbol and description for a single company
 - **Parameters**: `company_name` (query parameter)
-- **Response**: `SymbolResponse` with symbol, confidence, success status
+- **Response**: `SymbolResponse` with symbol, description (actual stock name), confidence, success status
 - **Use Case**: Individual company symbol lookup
 
 **3. Upload CSV**
 ```http
 POST /api/upload
 ```
-- **Purpose**: Upload and enrich CSV file with ticker symbols
+- **Purpose**: Upload and enrich CSV file with ticker symbols and descriptions
 - **Body**: Multipart form data with CSV file
 - **Response**: `EnrichmentResult` with processing statistics
+- **Output**: CSV file with "Symbol" and "Description" columns populated
 - **Use Case**: Bulk processing of company data
 
 **4. Download Enriched CSV**
@@ -287,8 +332,8 @@ GET /api/download/{filename}
 ```
 - **Purpose**: Download the enriched CSV file
 - **Parameters**: `filename` (path parameter)
-- **Response**: CSV file download
-- **Use Case**: Retrieve processed data
+- **Response**: CSV file download with Name, Symbol, and Description columns
+- **Use Case**: Retrieve processed data with both symbol and actual stock names
 
 ### Pydantic Models
 
@@ -310,6 +355,7 @@ class CSVEnrichmentRequest(BaseModel):
 class SymbolResponse(BaseModel):
     company_name: str
     symbol: Optional[str]
+    description: Optional[str]  # Actual stock name/description from API
     success: bool
     confidence: Optional[float]
     source: str = "finnhub"
@@ -325,6 +371,15 @@ class EnrichmentResult(BaseModel):
     success_rate: float
     timestamp: datetime
 ```
+
+**Response Fields:**
+- **company_name**: Original input company name
+- **symbol**: Stock ticker symbol (e.g., "AAPL")
+- **description**: Actual stock/company name from Finnhub API (e.g., "APPLE INC")
+- **success**: Whether lookup was successful
+- **confidence**: Confidence score (0.0 to 1.0)
+- **source**: Data source identifier ("finnhub")
+- **timestamp**: Lookup timestamp
 
 ### Configuration Management (`app/core/config.py`)
 
@@ -399,12 +454,69 @@ class APIRateLimiter:
     # Status monitoring
 ```
 
+### NLP Matcher Implementation (`app/utils/matcher.py`)
+
+```python
+class NLPMatcher:
+    # Fuzzy string matching using difflib
+    # Common company words dictionary (50+ keywords)
+    # Similarity scoring with 60% threshold
+    # Word correction suggestions
+```
+
+**Key Features:**
+- **Fuzzy String Matching**: Uses Python's `difflib.SequenceMatcher` and `get_close_matches` for efficient matching
+- **Company Words Dictionary**: Pre-loaded with 50+ common company name keywords (Apple, Microsoft, Google, etc.)
+- **Similarity Threshold**: Minimum 60% similarity required for valid corrections
+- **Word Cleaning**: Removes non-alphabetic characters before matching
+- **Case-Insensitive Matching**: Handles case variations gracefully
+
+**Usage Example:**
+```python
+from app.utils.matcher import NLPMatcher
+
+# Get corrected word
+original = "Appl"
+corrected = NLPMatcher.get_corrected_word(original)
+# Returns: "apple" (if similarity >= 60%)
+
+# Check similarity
+score = NLPMatcher.similarity_score("Appl", "Apple")
+# Returns: 0.8 (80% similarity)
+```
+
+**Integration:**
+The NLP matcher is automatically used by `FinnhubService.lookup_symbol()` during retry attempts (attempts 2-3) to suggest corrected words when the original lookup fails.
+
+### CSV Output Format
+
+**Output CSV Structure:**
+The enriched CSV files include the following columns:
+
+1. **Name**: Original company name from input
+2. **Symbol**: Stock ticker symbol (e.g., "AAPL")
+3. **Description**: Actual stock/company name from Finnhub API (e.g., "APPLE INC")
+
+**Example Output CSV:**
+```csv
+Name,Symbol,Description
+Apple Inc,AAPL,APPLE INC
+Microsoft Corporation,MSFT,MICROSOFT CORP
+Tesla Inc,TSLA,TESLA INC
+```
+
+**CSV Processing Details:**
+- The "Description" column is automatically added if it doesn't exist in the input CSV
+- Description values are extracted from the Finnhub API `description` field
+- Empty descriptions are stored as empty strings in the CSV
+- All columns are preserved from the input CSV, with Symbol and Description columns updated/added
+
 ### Input Validation (`app/utils/validators.py`)
 
 **Comprehensive validation includes:**
 - **Company Name Validation**: Format and character validation
 - **File Validation**: Size, type, and security checks
-- **CSV Structure Validation**: Required columns and format
+- **CSV Structure Validation**: Required columns and format (Name, Symbol)
 - **Pagination Validation**: Page size and number constraints
 - **Search Term Sanitization**: Safe search input processing
 
@@ -431,6 +543,16 @@ class APIRateLimiter:
 
 #### State Management
 ```typescript
+interface SymbolResponse {
+  company_name: string
+  symbol: string | null
+  description: string | null  // Actual stock name from API
+  success: boolean
+  confidence: number | null
+  source: string
+  timestamp: string
+}
+
 interface EnrichmentResult {
   message: string
   output_file: string
@@ -445,7 +567,8 @@ interface EnrichmentResult {
 - `file` - Uploaded CSV file
 - `uploading` - Loading states
 - `csvResult` - Processing results
-- `resultData` - Display data
+- `resultData` - Display data (includes Name, Symbol, Description columns)
+- `columns` - Table column headers (dynamically set based on CSV or lookup result)
 - `error` - Error handling
 
 #### Core Functions
@@ -455,10 +578,17 @@ interface EnrichmentResult {
 const handleSingleLookup = async () => {
   // Input validation
   // API call to backend
+  // Extracts symbol and description from response
+  // Sets columns: ['Name', 'Symbol', 'Description']
+  // Updates resultData with company name, symbol, and description
   // Error handling
-  // State updates
 }
 ```
+
+**Response Display:**
+- **Name Column**: Original input company name
+- **Symbol Column**: Stock ticker symbol (displayed in blue)
+- **Description Column**: Actual stock/company name from API
 
 ##### 2. CSV Upload & Processing
 ```typescript
@@ -474,17 +604,25 @@ const handleCsvUpload = async () => {
 ##### 3. Data Display & Download
 ```typescript
 const loadCsvData = async (filePath: string) => {
-  // CSV parsing
-  // Table rendering
-  // Search functionality
+  // CSV parsing (includes Name, Symbol, Description columns)
+  // Extracts column headers dynamically from CSV
+  // Table rendering with all columns
+  // Search functionality across all columns
 }
 
 const handleDownload = async () => {
-  // File download
+  // File download of enriched CSV
+  // CSV includes Name, Symbol, and Description columns
   // Blob handling
   // Browser download trigger
 }
 ```
+
+**Results Table:**
+- Dynamically displays all columns from CSV or lookup result
+- Default columns: `['Name', 'Symbol', 'Description']` for single lookups
+- CSV uploads show all columns including Description
+- Search functionality works across all columns
 
 ### UI/UX Design Philosophy
 
@@ -1151,9 +1289,10 @@ class TestErrorHandling:
 #### Backend Excellence
 - **Zero-downtime Processing**: Continues operation despite individual API failures
 - **Memory Efficient**: Handles large CSV files without memory issues
+- **Intelligent Retry Logic**: NLP-based retry with up to 3 attempts for misspelled names
 - **Rate Limit Compliant**: Respects API limitations with intelligent retry logic
-- **Comprehensive Monitoring**: Detailed logging and performance metrics
-- **Error Recovery**: Graceful degradation with partial success handling
+- **Comprehensive Monitoring**: Detailed logging and performance metrics with attempt tracking
+- **Error Recovery**: Graceful degradation with partial success handling and detailed error context
 
 #### Frontend Innovation
 - **Modern React Architecture**: Hooks-based state management with TypeScript
@@ -1172,11 +1311,12 @@ class TestErrorHandling:
 ### Innovation Highlights
 
 #### Advanced Features
-1. **Intelligent Symbol Lookup**: Fallback strategies for company name matching
-2. **Bulk Processing**: Efficient handling of large datasets with progress tracking
-3. **File Management**: Secure upload/download with automatic cleanup
-4. **Rate Limiting**: Sophisticated token bucket algorithm implementation
-5. **Error Recovery**: Circuit breaker pattern for API resilience
+1. **Intelligent Symbol Lookup**: NLP-based retry logic with fuzzy string matching for misspelled company names
+2. **NLP Word Correction**: Automatic word correction using similarity matching (60% threshold)
+3. **Bulk Processing**: Efficient handling of large datasets with progress tracking
+4. **File Management**: Secure upload/download with automatic cleanup
+5. **Rate Limiting**: Sophisticated token bucket algorithm implementation
+6. **Error Recovery**: Circuit breaker pattern for API resilience with comprehensive attempt tracking
 
 #### Modern Development Practices
 1. **Type Safety**: Full type hints and validation throughout the stack

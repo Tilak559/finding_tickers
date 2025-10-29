@@ -12,6 +12,7 @@ class SymbolResponse(BaseModel):
     
     company_name: str = Field(..., description="Original company name")
     symbol: Optional[str] = Field(None, description="Found ticker symbol")
+    description: Optional[str] = Field(None, description="Actual stock name/description")
     success: bool = Field(..., description="Whether lookup was successful")
     confidence: Optional[float] = Field(None, ge=0, le=1, description="Confidence score")
     source: str = Field(default="finnhub", description="Data source")

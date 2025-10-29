@@ -30,33 +30,33 @@ class EnrichmentService:
         self.threads = min(10, os.cpu_count() or 4)
         self.page_size = 100
     
-    def get_symbol(self, company_name: str) -> Optional[str]:
+    def get_symbol(self, company_name: str) -> tuple[Optional[str], Optional[str]]:
         """
-        Get symbol for a single company using original logic.
+        Get symbol and description for a single company using original logic.
         
         Args:
             company_name: Company name to lookup
             
         Returns:
-            str: Symbol if found, None otherwise
+            tuple: (symbol, description) if found, (None, None) otherwise
         """
         try:
             # Original logic: symbol can't be too long so we are trimming after the 1st word
             symbol = company_name.split(" ")[0]
-            result = self.finnhub_service.lookup_symbol(symbol)
+            result_symbol, result_description = self.finnhub_service.lookup_symbol(symbol)
             
-            if isinstance(result, str):
-                logger.info(f"Symbol found for {company_name}: {result}")
-                return result
+            if isinstance(result_symbol, str):
+                logger.info(f"Symbol found for {company_name}: {result_symbol}")
+                return result_symbol, result_description
             else:
                 logger.warning(f"Could not find symbol for {company_name}")
-                return None
+                return None, None
                 
         except Exception as e:
             logger.error(f"Error getting company profile: {e}")
-            return None
+            return None, None
     
-    def process_row(self, idx: int, company_name: str) -> tuple[int, Optional[str]]:
+    def process_row(self, idx: int, company_name: str) -> tuple[int, Optional[str], Optional[str]]:
         """
         Process a single row using original threading logic.
         
@@ -65,26 +65,29 @@ class EnrichmentService:
             company_name: Company name to process
             
         Returns:
-            tuple: (index, symbol)
+            tuple: (index, symbol, description)
         """
         symbol = None
+        description = None
         try:
             if isinstance(company_name, str) and company_name.strip():
-                symbol = self.get_symbol(company_name)
+                symbol, description = self.get_symbol(company_name)
                 if isinstance(symbol, str):
                     logger.info(f"Symbol found for {company_name}: {symbol}")
                 else:
                     logger.warning(f"Could not find symbol for {company_name}")
                     symbol = None
+                    description = None
             else:
                 logger.warning(f"Invalid company name at row {idx}: {company_name}")
         except Exception as e:
             logger.error(f"Error processing row {idx} ({company_name}): {e}")
             symbol = None
+            description = None
         
         # Original rate limiting
         time.sleep(0.5)  # API rate limit
-        return idx, symbol
+        return idx, symbol, description
     
     def enrich_single_company(self, company_name: str) -> SymbolResponse:
         """
@@ -102,15 +105,17 @@ class EnrichmentService:
             logger.info(f"Starting enrichment for company: {company_name}")
             
             # Use original logic
-            symbol = self.get_symbol(company_name)
+            symbol, description = self.get_symbol(company_name)
+            logger.info(f"Got symbol: '{symbol}', description: '{description}' (type: {type(description)})")
             
             processing_time = time.time() - start_time
             
             if symbol:
-                logger.info(f"Enrichment completed for '{company_name}': {symbol} (took {processing_time:.2f}s)")
+                logger.info(f"Enrichment completed for '{company_name}': {symbol}, description: '{description}' (took {processing_time:.2f}s)")
                 return SymbolResponse(
                     company_name=company_name,
                     symbol=symbol,
+                    description=description if description else None,
                     success=True,
                     confidence=1.0,
                     source="finnhub",
@@ -121,6 +126,7 @@ class EnrichmentService:
                 return SymbolResponse(
                     company_name=company_name,
                     symbol=None,
+                    description=None,
                     success=False,
                     confidence=0.0,
                     source="finnhub",
@@ -134,6 +140,7 @@ class EnrichmentService:
             return SymbolResponse(
                 company_name=company_name,
                 symbol=None,
+                description=None,
                 success=False,
                 confidence=0.0,
                 source="finnhub",
@@ -179,6 +186,10 @@ class EnrichmentService:
                     processing_time_seconds=0.0
                 )
 
+            # Add Description column if it doesn't exist
+            if "Description" not in df.columns:
+                df["Description"] = ""
+
             total_rows = len(df)
             total_pages = math.ceil(total_rows / self.page_size)
             logger.info(f"Total rows: {total_rows}, processing in {total_pages} pages")
@@ -200,8 +211,9 @@ class EnrichmentService:
                                 futures.append(executor.submit(self.process_row, idx, company_name))
 
                     for future in as_completed(futures):
-                        idx, symbol = future.result()
+                        idx, symbol, description = future.result()
                         df.at[idx, "Symbol"] = symbol
+                        df.at[idx, "Description"] = description if description else ""
                         rows_processed += 1
                         if symbol:
                             rows_updated += 1

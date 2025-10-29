@@ -4,6 +4,7 @@ import axios from 'axios'
 interface SymbolResponse {
   company_name: string
   symbol: string | null
+  description: string | null
   success: boolean
   confidence: number | null
   source: string
@@ -58,8 +59,12 @@ function App() {
       
       if (response.data.success && response.data.symbol) {
         setSingleResult(response.data.symbol)
-        setColumns(['Name', 'Symbol'])
-        setResultData([{ Name: companyName, Symbol: response.data.symbol }])
+        setColumns(['Name', 'Symbol', 'Description'])
+        setResultData([{ 
+          Name: companyName, 
+          Symbol: response.data.symbol,
+          Description: response.data.description || ''
+        }])
       } else {
         setError('No symbol found')
       }

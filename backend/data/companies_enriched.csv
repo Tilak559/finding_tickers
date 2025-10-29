@@ -1,11 +1,11 @@
-Name,Symbol,Price,# of Shares,Market Value
-Apple Inc.,AAPL,189.89,10,1898.9
-Microsoft Corporation,MSFT,326.12,5,1630.6
-Berkshire Hathaway Inc. Class B,BRK.A,362.55,2,725.1
-Amazon.com Inc.,AMZN,130.25,8,1042.0
-Alphabet Inc. Class A,GOOGL,139.14,6,834.84
-Tesla Inc,TSLA,255.25,3,765.75
-NVIDIA Corporation,NVDA,470.11,4,1880.44
-Unknown Tech Co,,12.0,100,1200.0
-(blank),GOOGL,139.14,5,695.7
-(blank),TSLA,255.25,4,1021.0
+Name,Symbol,Price,# of Shares,Market Value,Description
+Apple Inc.,AAPL,189.89,10,1898.9,
+Microsoft Corporation,MSFT,326.12,5,1630.6,Microsoft Corp
+Berkshire Hathaway Inc. Class B,BRK.A,362.55,2,725.1,Berkshire Hathaway Inc
+Amazon.com Inc.,AMZN,130.25,8,1042.0,
+Alphabet Inc. Class A,GOOGL,139.14,6,834.84,Alphabet Inc
+Tesla Inc,TSLA,255.25,3,765.75,Tesla Inc
+NVIDIA Corporation,NVDA,470.11,4,1880.44,
+Unknown Tech Co,,12.0,100,1200.0,
+(blank),GOOGL,139.14,5,695.7,
+(blank),TSLA,255.25,4,1021.0,
